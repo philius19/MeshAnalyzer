@@ -6,13 +6,6 @@ MeshAnalyzer bridges MATLAB-based mesh generation (u-shape3D) with Python's scie
 
 ---
 
-## What is this?
-
-When studying immune cells under the microscope, we often need to quantify their shape—how rough is the membrane? Are there blebs forming? How does the cell change over time? MeshAnalyzer takes 3D surface meshes from u-shape3D and calculates everything you need: volume, curvature distributions, surface area, and temporal dynamics.
-
-Think of it as your morphology calculator. You feed it meshes, it gives you numbers and visualizations.
-
----
 
 ## Installation
 
@@ -21,7 +14,7 @@ cd /path/to/Scripts
 pip install -e .
 ```
 
-The `-e` flag means editable mode—you can modify the source without reinstalling. Useful when you're still figuring things out.
+The `-e` flag means editable mode, the source can be modified without reinstalling. 
 
 **Dependencies** (installed automatically):
 - numpy, scipy, matplotlib (the usual suspects)
@@ -30,14 +23,14 @@ The `-e` flag means editable mode—you can modify the source without reinstalli
 
 Quick sanity check:
 ```bash
-python -c "from MeshAnalyzer import MeshAnalyzer; print('Ready to go')"
+python -c "from MeshAnalyzer import MeshAnalyzer; print('Check')"
 ```
 
 ---
 
 ## Quick Start
 
-Here's the basic workflow:
+Basic workflow:
 
 ```python
 from MeshAnalyzer import MeshAnalyzer
@@ -58,9 +51,8 @@ results = analyzer.calculate_statistics()
 print(results.summary())
 ```
 
-You'll get something like:
+Output:
 ```
-=== Analysis Summary ===
 Vertices: 37,680
 Faces: 75,360
 Volume: 262.32 μm³
@@ -85,7 +77,7 @@ graph LR
     E --> G[Export]
 ```
 
-The pipeline is straightforward: load your mesh, validate it's properly formed, calculate statistics, and visualize or export results. Everything is cached, so recalculating doesn't repeat expensive operations.
+The pipeline is straightforward: load the mesh, validate it's properly formed, calculate statistics, and visualize or export results. Everything is cached, so recalculating doesn't repeat expensive operations.
 
 ---
 
@@ -94,16 +86,15 @@ The pipeline is straightforward: load your mesh, validate it's properly formed, 
 Curvature tells you how bent the membrane is at each point. Two main types:
 
 **Mean Curvature** (H = (κ₁ + κ₂)/2)
-- Positive: convex bumps (blebs, filopodia)
-- Negative: concave dents (invaginations)
-- Zero: flat or saddle-shaped
+- Positive: concave dents (invaginations)
+- Negative: convex bumps (blebs, filopodia)
+- Zero: flat 
 
 **Gaussian Curvature** (K = κ₁ × κ₂)
 - Positive: peaks or pits (elliptic points)
 - Negative: saddle shapes (hyperbolic points)
 - Zero: cylindrical surfaces (parabolic points)
 
-The sign convention matters. In our setup, a bleb has positive mean curvature. A phagocytic cup has negative mean curvature. If your results seem backwards, check the mesh orientation.
 
 ---
 
@@ -177,8 +168,8 @@ fig, ax = basic_spatial_plot(
 <table>
 <tr>
 <td>
-<i>Red regions: positive curvature (blebs, protrusions)</i><br>
-<i>Blue regions: negative curvature (invaginations)</i><br>
+<i>Red regions: negative curvature (blebs, protrusions)</i><br>
+<i>Blue regions: positive curvature (invaginations)</i><br>
 <i>White: near-zero curvature (flat membrane)</i>
 </td>
 </tr>
