@@ -1,12 +1,7 @@
-"""
-Visualization functions for mesh analysis.
-"""
+"""Visualization functions for mesh analysis."""
 from typing import Optional
 import numpy as np
 import matplotlib.pyplot as plt
-
-
-# Set Nature-style plotting parameters
 plt.rcParams.update({
     'font.family': 'Arial',
     'font.size': 8,
@@ -22,7 +17,6 @@ plt.rcParams.update({
     'figure.dpi': 300
 })
 
-# Nature color palette
 NATURE_COLORS = {
     'blue': '#2E86AB',
     'red': '#E63946', 
@@ -35,21 +29,11 @@ NATURE_COLORS = {
 
 
 
-def plot_curvature_distribution(curvature: np.ndarray, 
+def plot_curvature_distribution(curvature: np.ndarray,
                               save_path: Optional[str] = None) -> plt.Figure:
-    """
-    Plot curvature distribution with linear and log scale.
-    
-    Parameters:
-        curvature: Array of curvature values
-        save_path: Optional path to save figure
-        
-    Returns:
-        matplotlib Figure object
-    """
+    """Plot curvature distribution with linear and log scale."""
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
 
-    # Linear scale
     ax1.hist(curvature, bins=100, alpha=0.7)
     ax1.axvline(0, color=NATURE_COLORS['red'], linestyle='--', label='Zero')
     ax1.set_xlabel('Curvature (1/pixels)')
@@ -57,7 +41,6 @@ def plot_curvature_distribution(curvature: np.ndarray,
     ax1.set_title('Curvature Distribution')
     ax1.legend()
 
-    # Log scale
     non_zero_curv = curvature[curvature != 0]
     ax2.hist(non_zero_curv, bins=100, alpha=0.7)
     ax2.set_yscale('log')
@@ -72,58 +55,36 @@ def plot_curvature_distribution(curvature: np.ndarray,
 
     return fig
 
-# ========== Enter Function for 3D Visualisation ==========
-# ========== Enter Function for 3D Plot ==========
 
-def basic_spatial_plot(mesh, curvature: np.ndarray, 
-                       save_path: Optional[str] = None, 
+def basic_spatial_plot(mesh, curvature: np.ndarray,
+                       save_path: Optional[str] = None,
                        title: str = "Spatial Curvature Distribution") -> plt.Figure:
-    """
-    Create a simple spatial visualization of curvature.
-    
-    This shows you where high/low curvatures are located.
-    
-    Parameters:
-    -----------
-    mesh : vedo.Mesh object
-        The mesh with face centers
-    curvature : np.ndarray
-        Curvature values for each face
-    
-    Example:
-    --------
-    >>> basic_spatial_plot(analyzer_2d.mesh, analyzer_2d.curvature, "2D Neuron")
-    """
-    # Calculate face centers manually for vedo mesh
+    """Create a spatial visualization showing where high/low curvatures are located."""
     vertices = mesh.vertices
     faces = mesh.cells
     face_centers = np.array([np.mean(vertices[face], axis=0) for face in faces])
-    
-    fig, ax = plt.subplots(figsize=(10, 8)) 
 
-    # Make the color scale symmetric around zero
-    vmax = np.percentile(np.abs(curvature), 95)                                   # Use absolute value
-    vmin = -vmax                                                                  # Make symmetric
-    
-    # Create scatter plot
-    scatter = ax.scatter(face_centers[:, 0], face_centers[:, 1],                  # X coordinates (all rows, column 0) and Y  coordinates (all rows, column 1)
-                        c=curvature, s=0.5, cmap='RdBu',                          # Color each point by its curvature value (s = size each dot)
-                        vmin=vmin, vmax=vmax)                                     # Color scale limits at 5th and 95th percentiles (removes outliers from color scaling)
-    
+    fig, ax = plt.subplots(figsize=(10, 8))
+
+    vmax = np.percentile(np.abs(curvature), 95)
+    vmin = -vmax
+
+    scatter = ax.scatter(face_centers[:, 0], face_centers[:, 1],
+                        c=curvature, s=0.5, cmap='RdBu',
+                        vmin=vmin, vmax=vmax)
+
     ax.set_xlabel('X position (pixels)')
     ax.set_ylabel('Y position (pixels)')
     ax.set_title(title)
-    ax.set_aspect('equal')                                                        # Equal aspect ratio: Ensures 1 pixel in X = 1 pixel in Y. Prevents distortion of the neuron shape
-    
-    # Add colorbar
-    cbar = plt.colorbar(scatter, ax=ax)                                           # Add colorbar: Shows the color-to-curvature mapping. The colorbar is linked to the scatter plot and labeled with units.
+    ax.set_aspect('equal')
+
+    cbar = plt.colorbar(scatter, ax=ax)
     cbar.set_label('Mean Curvature (1/pixels)')
-    
-    # Add some statistics to the plot
-    stats_text = f'Mean: {np.mean(curvature):.3f}\nStd: {np.std(curvature):.3f}'  # Create statistics text: Formats mean and standard deviation to 3 decimal places
-    ax.text(0.02, 0.98, stats_text, transform=ax.transAxes, 
+
+    stats_text = f'Mean: {np.mean(curvature):.3f}\nStd: {np.std(curvature):.3f}'
+    ax.text(0.02, 0.98, stats_text, transform=ax.transAxes,
             va='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
-    
+
     plt.tight_layout()
 
     if save_path:

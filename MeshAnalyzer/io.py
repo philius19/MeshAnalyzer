@@ -1,113 +1,71 @@
-from mat73 import loadmat as loadmat_v73
-import scipy.io as sio
+"""File input/output operations for mesh analysis."""
 from pathlib import Path
-import vedo
 from typing import Tuple, List
-import numpy as np
 import json
 
-"""
-File input/output operations for mesh analysis. Maybe rework to store all of the data in one single Library?
-"""
+import numpy as np
+import scipy.io as sio
+import vedo
+from mat73 import loadmat as loadmat_v73
 
 
 def loadmat(filepath: str) -> dict:
-    """
-    Load MATLAB file, automatically handling both v7.3 (HDF5) and older formats.
-
-    Parameters:
-        filepath: Path to .mat file
-
-    Returns:
-        Dictionary containing MATLAB variables
-
-    Raises:
-        OSError: If file cannot be read
-    """
+    """Load MATLAB file, automatically handling both v7.3 (HDF5) and older formats."""
     try:
-        # Try MATLAB 7.3 format first (mat73)
         return loadmat_v73(filepath)
     except (TypeError, OSError):
-        # Fall back to older format (scipy.io)
         return sio.loadmat(filepath, struct_as_record=False, squeeze_me=True)
 
-def validate_file_paths(surface_path: Path, curvature_path: Path, 
+def validate_file_paths(surface_path: Path, curvature_path: Path,
                        supported_formats: List[str]) -> None:
-    """
-    Validate input files exist and have correct format.
-    
-    Raises:
-        FileNotFoundError: If files don't exist
-        ValueError: If format not supported
-    """
+    """Validate input files exist and have correct format."""
     for path, name in [(surface_path, "Surface"), (curvature_path, "Curvature")]:
         if not path.exists():
             raise FileNotFoundError(f"{name} file not found: {path}")
-        
+
         if path.suffix not in supported_formats:
-            raise ValueError(
-                f"{name} file format {path.suffix} not supported. "
-                f"Supported formats: {supported_formats}"
-            )
+            raise ValueError(f"{name} file format {path.suffix} not supported. "
+                           f"Supported formats: {supported_formats}")
 
 
 def load_surface_data(filepath: Path) -> Tuple[np.ndarray, np.ndarray, vedo.Mesh]:
-    """
-    Load surface mesh data from .mat file.
-
-    Handles both MATLAB v7.3 (dict-like) and older formats (mat_struct).
-
-    Returns:
-        Tuple of (vertices, faces, mesh)
-    """
+    """Load surface mesh data from .mat file (both v7.3 and older formats)."""
     surface_data = loadmat(str(filepath))
     surface = surface_data['surface']
 
-    # Handle both dict-like (mat73) and struct-like (scipy.io) access
     if isinstance(surface, dict):
-        # MATLAB v7.3 format (mat73)
         vertices = np.array(surface['vertices'], dtype=np.float32)
-        faces = np.array(surface['faces'], dtype=np.int32) - 1  # Convert to 0-based
+        faces = np.array(surface['faces'], dtype=np.int32) - 1
     else:
-        # Older MATLAB format (scipy.io mat_struct)
         vertices = np.array(surface.vertices, dtype=np.float32)
-        faces = np.array(surface.faces, dtype=np.int32) - 1  # Convert to 0-based
+        faces = np.array(surface.faces, dtype=np.int32) - 1
 
     mesh = vedo.Mesh([vertices, faces])
-
     return vertices, faces, mesh
 
 
 def load_curvature_data(filepath: Path, expected_length: int) -> np.ndarray:
-
+    """Load mean curvature data and validate length."""
     curv_data = loadmat(str(filepath))
     curvature = np.array(curv_data['meanCurvature']).flatten()
 
-
-    
     if len(curvature) != expected_length:
-        raise ValueError(
-            f"Curvature length ({len(curvature)}) doesn't match "
-            f"expected count ({expected_length})"
-        )
-    
+        raise ValueError(f"Curvature length ({len(curvature)}) doesn't match "
+                        f"expected count ({expected_length})")
+
     return curvature
 
+
 def load_curvature_data_raw(filepath: Path) -> np.ndarray:
-
+    """Load raw (unsmoothed) mean curvature data."""
     curv_raw_data = loadmat(str(filepath))
-    curv_raw_data = np.array(curv_raw_data['meanCurvatureUnsmoothed']).flatten()
-
-    return curv_raw_data
+    return np.array(curv_raw_data['meanCurvatureUnsmoothed']).flatten()
 
 
 def load_gauss_data(filepath: Path) -> np.ndarray:
-
-
+    """Load Gaussian curvature data."""
     gauss_data = loadmat(str(filepath))
-    gauss_data = np.array(gauss_data['gaussCurvatureUnsmoothed']).flatten()
-
-    return gauss_data
+    return np.array(gauss_data['gaussCurvatureUnsmoothed']).flatten()
 
 
 def save_mesh_to_ply(mesh, filepath: Path) -> None:

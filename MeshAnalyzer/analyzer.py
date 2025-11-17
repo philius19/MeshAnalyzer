@@ -1,140 +1,89 @@
+import logging
 from pathlib import Path
 from typing import Optional, Dict
 
 import numpy as np
 import vedo
 
-
 from .io import load_surface_data, load_curvature_data, validate_file_paths
 from .utils import calculate_mesh_quality_metrics
 from .datatypes import AnalysisResults, MeshStatistics, CurvatureStatistics
 
+logger = logging.getLogger(__name__)
+
 class MeshAnalyzer:
     """
-    A class to analyze u-shape3D mesh data including surface geometry and curvature.
-    
-    This class provides methods to:
-    - Load mesh and curvature data
-    - Calculate mesh statistics
-    - Visualize results
-    - Export analysis results
-    
-    Attributes:
-        surface_path (str): Path to surface .mat file
-        curvature_path (str): Path to curvature .mat file
-        mesh (trimesh.Trimesh): The loaded mesh object
-        curvature (np.ndarray): Curvature values at vertices
-        _processed (bool): Flag indicating if data has been processed
-    
+    Analyze u-shape3D mesh data including surface geometry and curvature.
+
     Example:
         >>> analyzer = MeshAnalyzer('surface.mat', 'curvature.mat')
         >>> analyzer.load_data()
         >>> stats = analyzer.calculate_statistics()
     """
-
-    # ========== CLASS VARIABLES (shared by all instances) ==========
     VERSION = "1.0.0"
     SUPPORTED_FORMATS = ['.mat', '.h5']
-
-    DEFAULT_PIXEL_SIZE_XY = 0.1  # micrometers
-    DEFAULT_PIXEL_SIZE_Z = 0.1   # micrometers
+    DEFAULT_PIXEL_SIZE_XY = 0.1
+    DEFAULT_PIXEL_SIZE_Z = 0.1
 
     def __init__(self, surface_path:str, curvature_path: str,
                  pixel_size_xy: float = None, pixel_size_z: float = None):
-        
         """
         Initialize the MeshAnalyzer.
-        
+
         Parameters:
             surface_path: Path to surface .mat file
-            curvature_path: Path to curvature .mat file  
+            curvature_path: Path to curvature .mat file
             pixel_size_xy: XY pixel size in micrometers (default: 0.1)
             pixel_size_z: Z pixel size in micrometers (default: 0.2)
-        
-        Raises:
-            FileNotFoundError: If input files don't exist
-            ValueError: If file format is not supported
         """
-
-        # Store paths as Path objects for better path handling
         self.surface_path = Path(surface_path)
         self.curvature_path = Path(curvature_path)
-
-        # Validate inputs
         self._validate_inputs()
 
-        # Set pixel sizes
         self.pixel_size_xy = pixel_size_xy or self.DEFAULT_PIXEL_SIZE_XY
         self.pixel_size_z = pixel_size_z or self.DEFAULT_PIXEL_SIZE_Z
 
-         # Initialize data containers (None until loaded) - Optional is a type hint (array or None)
         self.vertices: Optional[np.ndarray] = None
         self.faces: Optional[np.ndarray] = None
         self.mesh: Optional[vedo.Mesh] = None
         self.curvature: Optional[np.ndarray] = None
 
-        # Private attributes (convention: prefix with _)
-        self._processed = False           
+        self._processed = False
         self._statistics_cache = {}
-
-        # Analysis results storage using dataclass
         self.results = AnalysisResults()
 
-        # ========== PRIVATE METHODS (internal use) ==========
     def _validate_inputs(self):
         """Validate input files exist and have correct format."""
         validate_file_paths(self.surface_path, self.curvature_path, self.SUPPORTED_FORMATS)
-                
-        # ========== PUBLIC METHODS ==========
-    def load_data(self, verbose: bool = True) -> None:
+
+    def load_data(self, verbose: bool = False) -> None:
         """Load mesh and curvature data from files."""
-
-        if verbose:
-            print(f"Loading surface from: {self.surface_path}")
-
         try:
-            # Load surface data
+            logger.info(f"Loading surface from {self.surface_path}")
             self.vertices, self.faces, self.mesh = load_surface_data(self.surface_path)
 
-            # Fix mesh orientation if needed
             if self.mesh.volume() < 0:
-                if verbose:
-                    print("Fixing inverted mesh...")
+                logger.debug("Fixing inverted mesh orientation")
                 self.mesh.reverse()
 
-            # Load curvature
-            if verbose:
-                print(f"Loading curvature from: {self.curvature_path}")
-
+            logger.info(f"Loading curvature from {self.curvature_path}")
             self.curvature = load_curvature_data(self.curvature_path, len(self.faces))
-
             self._processed = True
 
-            if verbose:
-                print(f"✓ Loaded {len(self.vertices)} vertices, {len(self.faces)} faces")
-                print(f"✓ Mesh volume: {self.mesh.volume()} pixels³")
+            logger.info(f"Loaded {len(self.vertices)} vertices, {len(self.faces)} faces")
 
         except Exception as e:
+            logger.error(f"Failed to load data: {str(e)}")
             raise RuntimeError(f"Failed to load data: {str(e)}")
 
     def calculate_statistics(self, force_recalculate: bool = False) -> AnalysisResults:
-        """
-        Calculate comprehensive mesh and curvature statistics.
-        
-        Parameters:
-            force_recalculate: Recalculate even if cached
-            
-        Returns:
-            AnalysisResults dataclass containing all statistics
-        """
+        """Calculate comprehensive mesh and curvature statistics."""
         if not self._processed:
             raise RuntimeError("Must load data first. Call load_data()")
-        
-        # Check cache - avoid expensive recalculations
+
         if self.results.is_complete() and not force_recalculate:
             return self.results
-        
-        # Calculate mesh statistics
+
         self.results.mesh_stats = MeshStatistics(
             n_vertices=len(self.vertices),
             n_faces=len(self.faces),
@@ -147,14 +96,10 @@ class MeshAnalyzer:
             is_watertight=self.mesh.is_closed(),
             euler_number=self.mesh.euler_characteristic()
         )
-        
-        # Calculate curvature statistics
+
         self.results.curvature_stats = CurvatureStatistics.from_array(self.curvature)
-        
-        # Calculate quality metrics
         self.results.quality_metrics = calculate_mesh_quality_metrics(self.mesh)
-        
-        # For backwards compatibility, also store as dict
+
         self._statistics_cache['basic_stats'] = {
             'mesh': self.results.mesh_stats.to_dict(),
             'curvature': self.results.curvature_stats.__dict__,
@@ -164,20 +109,15 @@ class MeshAnalyzer:
         return self.results
     
     def calculate_statistics_dict(self, force_recalculate: bool = False) -> Dict:
-        """
-        Legacy method that returns statistics as dictionary.
-        
-        Use calculate_statistics() for new code to get dataclass results.
-        """
+        """Legacy method that returns statistics as dictionary."""
         results = self.calculate_statistics(force_recalculate)
         return {
             'mesh': results.mesh_stats.to_dict() if results.mesh_stats else {},
             'curvature': results.curvature_stats.__dict__ if results.curvature_stats else {},
             'quality': results.quality_metrics.__dict__ if results.quality_metrics else {}
         }
-    
-    # ========== PROPERTY METHODS (only runs when accessed f.e. analyzer.is_loaded) ==========
-    @property 
+
+    @property
     def is_loaded(self) -> bool:
         """Check if data has been loaded."""
         return self._processed
@@ -194,49 +134,23 @@ class MeshAnalyzer:
             'y_um': (bounds[3] - bounds[2]) * self.pixel_size_xy,
             'z_um': (bounds[5] - bounds[4]) * self.pixel_size_z
         }
-    
-    # ========== CLASS METHODS (don't need instance) ==========
+
     @classmethod
     def from_config(cls, config_path: str) -> 'MeshAnalyzer':
-        """
-        Create analyzer from configuration file.
-        
-        Parameters:
-            config_path: Path to configuration JSON/YAML
-            
-        Returns:
-            MeshAnalyzer instance
-        """
-        # Load config and create instance
-        # This is an alternative constructor
+        """Create analyzer from configuration file."""
         pass
 
-        # ========== STATIC METHODS (utility functions) ==========
-    @staticmethod
-    def convert_pixels_to_um(value: float, pixel_size: float) -> float:
-        """Convert pixel units to micrometers."""
-        return value * pixel_size
-    
-    # ========== MAGIC METHODS (special behavior) ========== --> Defines the identity of the object when implemented 
     def __str__(self) -> str:
-        """String representation for print()."""
         if not self._processed:
             return f"MeshAnalyzer(not loaded)"
-        return (f"MeshAnalyzer({len(self.vertices)} vertices, "
-                f"{len(self.faces)} faces)")
-    
+        return f"MeshAnalyzer({len(self.vertices)} vertices, {len(self.faces)} faces)"
+
     def __repr__(self) -> str:
-        """Detailed representation for debugging."""
-        return (f"MeshAnalyzer(surface='{self.surface_path.name}', "
-                f"curvature='{self.curvature_path.name}')")
-    
-    # ========== CONTEXT MANAGER (with statement) ==========
+        return f"MeshAnalyzer(surface='{self.surface_path.name}', curvature='{self.curvature_path.name}')"
+
     def __enter__(self):
-        """Support 'with' statement."""
         self.load_data()
         return self
-    
+
     def __exit__(self, exc_type, exc_val, exc_tb):
-        """Cleanup when exiting 'with' block."""
-        # Could clear memory, close files, etc.
         pass
