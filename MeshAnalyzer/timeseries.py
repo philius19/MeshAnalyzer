@@ -1,14 +1,16 @@
 """Time-series analysis extension for MeshAnalyzer."""
 import logging
+import re
 from collections import OrderedDict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Optional, Dict, Iterator, Tuple, List
+from typing import Optional, Dict, Iterator, Tuple
 
 import numpy as np
 
-from .analyzer import MeshAnalyzer
-from .datatypes import AnalysisResults
+from .datatypes import ProcessingMetadata, MeshFrame
+from .io import load_moviedata_metadata, load_mesh_frame
+from .utils import remap_volume_path
 
 logger = logging.getLogger(__name__)
 
@@ -31,33 +33,20 @@ class TimeFrameInfo:
         return self.time_index < other.time_index
 
 
-@dataclass
-class TimeSeriesData:
-    """Loaded data for a single time frame."""
-    time_index: int
-    analyzer: MeshAnalyzer
-    face_centers: np.ndarray
-    curvature: np.ndarray
-
-    @property
-    def n_faces(self) -> int:
-        return len(self.analyzer.faces)
-
-    @property
-    def n_vertices(self) -> int:
-        return len(self.analyzer.vertices)
-
-
 class TimeSeriesManager:
     """Manages time-lapse mesh data with lazy loading and caching (dict-like interface)."""
 
     def __init__(self, data_dir: Path, pixel_size_xy: float, pixel_size_z: float,
-                 cache_mode: str = 'lazy', max_cached_frames: int = 10, verbose: bool = True):
+                 cache_mode: str = 'lazy', max_cached_frames: int = 10, verbose: bool = True,
+                 metadata: Optional[ProcessingMetadata] = None,
+                 load_auxiliary: bool = False):
         """Initialize TimeSeriesManager with caching options."""
         self.data_dir = Path(data_dir)
         self.pixel_size_xy = pixel_size_xy
         self.pixel_size_z = pixel_size_z
         self.verbose = verbose
+        self.metadata = metadata
+        self.load_auxiliary = load_auxiliary
 
         if cache_mode not in ('none', 'lazy', 'all'):
             raise ValueError(f"cache_mode must be 'none', 'lazy', or 'all', got: {cache_mode}")
@@ -65,30 +54,107 @@ class TimeSeriesManager:
         self.max_cached_frames = max_cached_frames
 
         self._frame_info: OrderedDict[int, TimeFrameInfo] = OrderedDict()
-        self._loaded_frames: OrderedDict[int, TimeSeriesData] = OrderedDict()
-        self._access_order: List[int] = []
+        self._loaded_frames: OrderedDict[int, MeshFrame] = OrderedDict()
         self._global_stats_cache: Optional[Dict] = None
 
-    def discover_frames(self, pattern: str = 'surface_*.mat') -> int:
-        """Discover all time frames in data directory."""
+    @classmethod
+    def from_cell_directory(cls, cell_dir: Path, channel: int = 1,
+                           cache_mode: str = 'lazy',
+                           load_auxiliary: bool = False,
+                           volume_remap: Optional[Dict[str, str]] = None) -> 'TimeSeriesManager':
+        """
+        Factory method to create TimeSeriesManager from cell directory.
+
+        Automatically extracts metadata from MovieData file.
+
+        Parameters:
+            cell_dir: Path to cell directory
+            channel: Channel number
+            cache_mode: 'none', 'lazy', or 'all'
+            load_auxiliary: Load auxiliary data (normals, Gaussian curv, etc.)
+            volume_remap: Optional volume path remapping
+
+        Returns:
+            TimeSeriesManager with metadata loaded
+        """
+        cell_dir = Path(cell_dir)
+
+        # Try both lowercase and uppercase variants
+        md_files = list(cell_dir.glob('*_decon.mat')) + list(cell_dir.glob('*_Decon.mat'))
+        if not md_files:
+            raise FileNotFoundError(f"No MovieData file found in {cell_dir}")
+
+        moviedata_path = md_files[0]
+        metadata = load_moviedata_metadata(moviedata_path, channel)
+
+        if volume_remap and metadata.source_image_path:
+            remapped_path = remap_volume_path(metadata.source_image_path, volume_remap)
+            metadata = replace(metadata, source_image_path=remapped_path)
+
+        mesh_dir = cell_dir / 'Morphology' / 'Analysis' / 'Mesh' / f'ch{channel}'
+
+        return cls(
+            data_dir=mesh_dir,
+            pixel_size_xy=metadata.pixel_size_xy_nm / 1000.0,
+            pixel_size_z=metadata.pixel_size_z_nm / 1000.0,
+            cache_mode=cache_mode,
+            metadata=metadata,
+            load_auxiliary=load_auxiliary
+        )
+
+    def discover_frames(self, pattern: str = 'surface_*.mat',
+                       filename_pattern: str = r'surface_(\d+)_(\d+)\.mat') -> int:
+        """
+        Discover all time frames in data directory using robust regex matching.
+
+        Parameters:
+            pattern: Glob pattern for finding surface files (default: 'surface_*.mat')
+            filename_pattern: Regex pattern for extracting time index from filename
+                            (default: r'surface_(\\d+)_(\\d+)\\.mat')
+                            Must have at least 2 capture groups: (cell_id, time_index)
+
+        Returns:
+            Number of discovered frames
+
+        Raises:
+            FileNotFoundError: If no surface files found
+            ValueError: If no valid time frames found
+
+        Note:
+            Uses regex for robust filename parsing instead of fragile string splitting.
+            Automatically pairs surface files with corresponding curvature files.
+        """
         logger.info(f"Discovering frames in: {self.data_dir}")
 
         surface_files = sorted(self.data_dir.glob(pattern))
         if not surface_files:
             raise FileNotFoundError(f"No surface files found in {self.data_dir}")
 
+        # Compile regex pattern for performance
+        pattern_regex = re.compile(filename_pattern)
         discovered_frames = []
 
         for surface_path in surface_files:
-            try:
-                parts = surface_path.stem.split('_')
-                if len(parts) < 3:
-                    raise ValueError("Invalid filename format")
+            # Match filename with regex
+            match = pattern_regex.match(surface_path.name)
+            if not match:
+                logger.debug(f"Skipping {surface_path.name}: doesn't match pattern {filename_pattern}")
+                continue
 
-                time_index = int(parts[2])
+            try:
+                # Extract time index from second capture group
+                groups = match.groups()
+                if len(groups) < 2:
+                    logger.warning(f"Regex pattern must have at least 2 capture groups, got {len(groups)}")
+                    continue
+
+                time_index = int(groups[1])  # Second group is time index
+
+                # Find corresponding curvature file
                 curv_path = surface_path.parent / surface_path.name.replace('surface', 'meanCurvature')
 
                 if not curv_path.exists():
+                    logger.debug(f"Skipping T{time_index}: missing curvature file {curv_path.name}")
                     continue
 
                 frame_info = TimeFrameInfo(
@@ -98,7 +164,8 @@ class TimeSeriesManager:
                 )
                 discovered_frames.append((time_index, frame_info))
 
-            except (IndexError, ValueError):
+            except (ValueError, IndexError) as e:
+                logger.debug(f"Skipping {surface_path.name}: {e}")
                 continue
 
         self._frame_info = OrderedDict(sorted(discovered_frames))
@@ -124,64 +191,73 @@ class TimeSeriesManager:
 
         logger.info(f"Preloaded {len(self._loaded_frames)} frames")
 
-    def _load_frame_internal(self, time_index: int) -> TimeSeriesData:
+    def _load_frame_internal(self, time_index: int) -> MeshFrame:
         """Load a single frame into memory."""
         frame_info = self._frame_info[time_index]
 
-        analyzer = MeshAnalyzer(
-            str(frame_info.surface_path),
-            str(frame_info.curvature_path),
+        frame = load_mesh_frame(
+            surface_path=frame_info.surface_path,
+            curvature_path=frame_info.curvature_path,
             pixel_size_xy=self.pixel_size_xy,
-            pixel_size_z=self.pixel_size_z
-        )
-        analyzer.load_data(verbose=False)
-
-        vertices = analyzer.vertices
-        faces = analyzer.faces
-        face_centers = np.array([np.mean(vertices[face], axis=0) for face in faces])
-
-        data = TimeSeriesData(
-            time_index=time_index,
-            analyzer=analyzer,
-            face_centers=face_centers,
-            curvature=analyzer.curvature.copy()
+            pixel_size_z=self.pixel_size_z,
+            metadata=self.metadata,
+            load_auxiliary=self.load_auxiliary
         )
 
-        return data
+        return frame
 
     def _evict_lru_frame(self) -> None:
-        """Evict least recently used frame from cache."""
-        if not self._access_order:
-            return
+        """
+        Evict least recently used frame from cache.
 
-        for time_idx in self._access_order:
-            if time_idx in self._loaded_frames:
-                del self._loaded_frames[time_idx]
-                self._access_order.remove(time_idx)
-                break
+        Uses OrderedDict.popitem(last=False) to remove the least recently
+        accessed frame efficiently (O(1) operation).
+        """
+        if self._loaded_frames:
+            # Remove first item (least recently used) from OrderedDict
+            evicted_key, _ = self._loaded_frames.popitem(last=False)
+            logger.debug(f"Evicted frame {evicted_key} from cache (LRU)")
 
-    def load_frame(self, time_index: int) -> TimeSeriesData:
-        """Load a specific time frame with caching."""
+    def load_frame(self, time_index: int) -> MeshFrame:
+        """
+        Load a specific time frame with LRU caching.
+
+        Uses OrderedDict to maintain LRU order automatically. When a frame
+        is accessed, it's moved to the end (most recently used position).
+
+        Parameters:
+            time_index: Time index to load
+
+        Returns:
+            MeshFrame for the requested frame
+
+        Raises:
+            KeyError: If time_index not found
+        """
         if time_index not in self._frame_info:
             available = list(self._frame_info.keys())
             raise KeyError(f"Time index {time_index} not found. Available: {available}")
 
-        if time_index in self._access_order:
-            self._access_order.remove(time_index)
-        self._access_order.append(time_index)
-
+        # Check if already in cache
         if time_index in self._loaded_frames:
+            # Move to end (mark as most recently used)
+            self._loaded_frames.move_to_end(time_index)
             return self._loaded_frames[time_index]
 
+        # Load frame from disk
         data = self._load_frame_internal(time_index)
 
+        # Handle caching based on cache mode
         if self.cache_mode == 'none':
+            # No caching - return data without storing
             return data
         elif self.cache_mode == 'lazy':
+            # LRU eviction if cache is full
             if len(self._loaded_frames) >= self.max_cached_frames:
                 self._evict_lru_frame()
             self._loaded_frames[time_index] = data
         elif self.cache_mode == 'all':
+            # Cache everything (no eviction)
             self._loaded_frames[time_index] = data
 
         return data
@@ -277,10 +353,10 @@ class TimeSeriesManager:
 
         return normalized
 
-    def __getitem__(self, time_index: int) -> TimeSeriesData:
+    def __getitem__(self, time_index: int) -> MeshFrame:
         return self.load_frame(time_index)
 
-    def __iter__(self) -> Iterator[Tuple[int, TimeSeriesData]]:
+    def __iter__(self) -> Iterator[Tuple[int, MeshFrame]]:
         for time_idx in self._frame_info.keys():
             yield time_idx, self.load_frame(time_idx)
 
@@ -293,7 +369,7 @@ class TimeSeriesManager:
     def keys(self) -> Iterator[int]:
         return iter(self._frame_info.keys())
 
-    def items(self) -> Iterator[Tuple[int, TimeSeriesData]]:
+    def items(self) -> Iterator[Tuple[int, MeshFrame]]:
         return self.__iter__()
 
     def __str__(self) -> str:
@@ -306,9 +382,8 @@ class TimeSeriesManager:
         return f"TimeSeriesManager(data_dir='{self.data_dir}', n_frames={len(self)}, cache_mode='{self.cache_mode}', cached={len(self._loaded_frames)})"
 
     def clear_cache(self) -> None:
-        """Clear all cached frames."""
+        """Clear all cached frames and global statistics cache."""
         self._loaded_frames.clear()
-        self._access_order.clear()
         self._global_stats_cache = None
 
     def get_cache_stats(self) -> Dict[str, any]:

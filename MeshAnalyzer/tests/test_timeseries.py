@@ -16,9 +16,7 @@ from MeshAnalyzer import TimeSeriesManager, TimeFrameInfo, TimeSeriesData
 from MeshAnalyzer.analyzer import MeshAnalyzer
 
 
-# ============================================================================
-# FIXTURES
-# ============================================================================
+
 
 @pytest.fixture
 def mock_data_dir(tmp_path):
@@ -82,9 +80,7 @@ def real_data_dir():
     return data_path
 
 
-# ============================================================================
-# UNIT TESTS
-# ============================================================================
+
 
 class TestTimeFrameInfo:
     """Test TimeFrameInfo dataclass."""
@@ -490,9 +486,7 @@ class TestTimeSeriesManager:
         assert "n_frames=5" in repr_str
 
 
-# ============================================================================
-# INTEGRATION TESTS
-# ============================================================================
+
 
 class TestIntegrationWithRealData:
     """Integration tests with real neutrophil data (if available)."""
@@ -566,9 +560,7 @@ class TestIntegrationWithRealData:
         print(f"  Std: {all_values.std():.4f}")
 
 
-# ============================================================================
-# PERFORMANCE TESTS
-# ============================================================================
+
 
 class TestPerformance:
     """Performance and memory tests."""
@@ -594,9 +586,7 @@ class TestPerformance:
         assert cache_stats['currently_cached'] <= 2
 
 
-# ============================================================================
-# RUN TESTS
-# ============================================================================
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "--tb=short"])

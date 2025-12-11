@@ -2,8 +2,18 @@
 Data structures for mesh analysis results.
 """
 from dataclasses import dataclass, field
-from typing import Dict, Optional
+from typing import Dict, Optional, Union, List
+from datetime import datetime
 import numpy as np
+
+
+# Default physical size constants (micrometers)
+DEFAULT_PIXEL_SIZE_XY_UM = 0.103
+DEFAULT_PIXEL_SIZE_Z_UM = 0.2167
+
+# Default physical size constants (nanometers)
+DEFAULT_PIXEL_SIZE_XY_NM = 103.0
+DEFAULT_PIXEL_SIZE_Z_NM = 216.7
 
 
 @dataclass(frozen=True)
@@ -107,5 +117,123 @@ class AnalysisResults:
             if warnings:
                 lines.append("\nWarnings:")
                 lines.extend(f"  - {w}" for w in warnings)
-        
+
         return "\n".join(lines)
+
+
+@dataclass(frozen=True)
+class MeshParameters:
+    """Parameters used for mesh generation."""
+    mesh_mode: str
+    inside_gamma: float
+    inside_blur: Union[float, List[float]]
+    filter_scales: List[float]
+    filter_num_std_surface: float
+    inside_dilate_radius: float
+    inside_erode_radius: float
+    smooth_mesh_mode: str
+    smooth_mesh_iterations: int
+    use_undeconvolved: bool
+    image_gamma: float
+    scale_otsu: float
+    smooth_image_size: float
+    curvature_median_filter_radius: int
+    curvature_smooth_on_mesh_iterations: int
+    register_images: bool
+    save_raw_images: bool
+    registration_mode: str
+
+
+# Default mesh parameters (single source of truth)
+DEFAULT_MESH_PARAMETERS = MeshParameters(
+    mesh_mode='otsu',
+    inside_gamma=0.6,
+    inside_blur=2,
+    filter_scales=[1.5, 2, 4],
+    filter_num_std_surface=2.0,
+    inside_dilate_radius=5,
+    inside_erode_radius=6.5,
+    smooth_mesh_mode='curvature',
+    smooth_mesh_iterations=6,
+    use_undeconvolved=False,
+    image_gamma=1.0,
+    scale_otsu=1.0,
+    smooth_image_size=0.0,
+    curvature_median_filter_radius=2,
+    curvature_smooth_on_mesh_iterations=20,
+    register_images=False,
+    save_raw_images=False,
+    registration_mode='translation'
+)
+
+
+@dataclass(frozen=True)
+class ProcessingMetadata:
+    """Provenance information for mesh generation."""
+    pixel_size_xy_nm: float
+    pixel_size_z_nm: float
+    time_interval_sec: float
+    source_image_path: str
+    source_image_name: str
+    processing_date: Optional[datetime]
+    matlab_version: Optional[str]
+    mesh_parameters: MeshParameters
+
+
+@dataclass(frozen=True)
+class AuxiliaryMeshData:
+    """Optional auxiliary mesh data."""
+    face_normals: Optional[np.ndarray] = None
+    gaussian_curvature: Optional[np.ndarray] = None
+    mean_curvature_raw: Optional[np.ndarray] = None
+    neighbors: Optional[np.ndarray] = None
+    image_surface: Optional[np.ndarray] = None
+
+
+@dataclass
+class MeshFrame:
+    """Complete mesh data for a single timepoint.
+
+    Unified data container that replaces MeshAnalyzer for data storage.
+    Includes lazy-computed properties to avoid redundant calculations.
+    """
+    vertices: np.ndarray
+    faces: np.ndarray
+    curvature: np.ndarray
+    mesh: 'vedo.Mesh'  # Forward reference for type hint
+    time_index: int = 0
+    metadata: Optional[ProcessingMetadata] = None
+    auxiliary: Optional[AuxiliaryMeshData] = None
+    _face_centers_cache: Optional[np.ndarray] = field(default=None, init=False, repr=False)
+
+    @property
+    def face_centers(self) -> np.ndarray:
+        """Compute face centers on demand, cache result."""
+        if self._face_centers_cache is None:
+            object.__setattr__(self, '_face_centers_cache',
+                             self.vertices[self.faces].mean(axis=1))
+        return self._face_centers_cache
+
+    @property
+    def n_faces(self) -> int:
+        """Number of faces in mesh."""
+        return len(self.faces)
+
+    @property
+    def n_vertices(self) -> int:
+        """Number of vertices in mesh."""
+        return len(self.vertices)
+
+    @property
+    def pixel_size_xy_um(self) -> Optional[float]:
+        """XY pixel size in micrometers (from metadata)."""
+        if self.metadata:
+            return self.metadata.pixel_size_xy_nm / 1000.0
+        return None
+
+    @property
+    def pixel_size_z_um(self) -> Optional[float]:
+        """Z pixel size in micrometers (from metadata)."""
+        if self.metadata:
+            return self.metadata.pixel_size_z_nm / 1000.0
+        return None
